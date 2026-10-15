@@ -1,0 +1,13 @@
+# Copy to searxng/settings.yml and replace the placeholder secret key.
+# Keep the SearXNG port bound to 127.0.0.1 in the compose file.
+use_default_settings: true
+
+server:
+  secret_key: "REPLACE_WITH_A_RANDOM_PRIVATE_VALUE"
+  limiter: true
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json
