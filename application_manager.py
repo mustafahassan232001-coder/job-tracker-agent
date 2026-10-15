@@ -371,11 +371,11 @@ def _authorized_auto_submit(job: dict[str, Any], cv_path: Path, cover_letter_pat
         return {"status": "submission_failed", "notes": "An authorized adapter reported an error; review and submit manually."}
 
 
-def _recipient_for(candidate_is_secondary: bool) -> list[str]:
-    if candidate_is_secondary:
-        raw = os.getenv("SECOND_CV_EMAIL", "").strip()
+def _recipient_for(candidate_is_ahmed: bool) -> list[str]:
+    if candidate_is_ahmed:
+        raw = os.getenv("AHMED_CV_EMAIL", "").strip()
         if not raw:
-            raw = ""
+            raw = "ahmedzidan1281993@gmail.com"
     else:
         raw = os.getenv("MY_CV_EMAILS", "").strip() or os.getenv("NOTIFICATION_EMAILS", "").strip()
     return list(dict.fromkeys(x.strip() for x in raw.split(",") if x.strip()))
@@ -390,7 +390,7 @@ def process_applications(
     db_path: Path,
     output_dir: Path,
     llm: Any,
-    candidate_is_secondary: bool,
+    candidate_is_ahmed: bool,
     run_number: int,
 ) -> dict[str, Any]:
     """Prepare per-job documents, attempt authorized adapters, and email a report.
@@ -399,7 +399,7 @@ def process_applications(
     jobs are packaged, and failed preparation is retried on a later run.
     """
     ensure_application_table(db_path)
-    candidate_label = "Secondary candidate" if candidate_is_secondary else cv_path.stem.replace("_", " ")
+    candidate_label = "Ahmed" if candidate_is_ahmed else cv_path.stem.replace("_", " ")
     application_root = output_dir / "applications" / _safe_slug(cv_path.stem)
     application_root.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc).isoformat()
@@ -533,7 +533,7 @@ def process_applications(
                 except ValueError:
                     archive.write(file_path, arcname=file_path.name)
 
-    recipients = _recipient_for(candidate_is_secondary)
+    recipients = _recipient_for(candidate_is_ahmed)
     if not recipients:
         logger.warning("No application report recipients configured for %s.", candidate_label)
         return {"application_packages_prepared": prepared_count}

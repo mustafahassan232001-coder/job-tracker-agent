@@ -55,7 +55,7 @@ if CV_PATHS_RAW:
         if item.strip()
     ]
 else:
-    CV_PATHS = [Path(os.getenv("CV_PATH", "resume_one.pdf"))]
+    CV_PATHS = [Path(os.getenv("CV_PATH", "my_cv.pdf"))]
 
 if not CV_PATHS:
     raise ValueError("Configure CV_PATH or CV_PATHS in your .env file.")
@@ -88,14 +88,14 @@ JOB_URL_TIMEOUT = max(3, int(os.getenv("JOB_URL_TIMEOUT", "8")))
 JOB_URL_VERIFY_WORKERS = max(1, min(20, int(os.getenv("JOB_URL_VERIFY_WORKERS", "10"))))
 MAX_JOB_URLS_TO_VERIFY = max(1, int(os.getenv("MAX_JOB_URLS_TO_VERIFY", "250")))
 MAX_JOBS_TO_ASSESS = max(1, int(os.getenv("MAX_JOBS_TO_ASSESS", "80")))
-SECOND_CV_EMAIL = os.getenv(
-    "SECOND_CV_EMAIL", ""
+AHMED_CV_EMAIL = os.getenv(
+    "AHMED_CV_EMAIL", "ahmedzidan1281993@gmail.com"
 ).strip()
-SECOND_CV_KEYWORDS = [
+AHMED_CV_KEYWORDS = [
     value.strip().lower().replace("_", " ").replace("-", " ")
     for value in os.getenv(
-        "SECOND_CV_KEYWORDS",
-        "second_candidate,alternate_cv,resume_two"
+        "AHMED_CV_KEYWORDS",
+        "ahmed_hassan_resume,ahmed_mohamed_hassan"
     ).split(",")
     if value.strip()
 ]
@@ -328,6 +328,8 @@ class JobSearchState(TypedDict, total=False):
     errors: Annotated[list[str], add]
 
     unique_jobs: list[dict[str, Any]]
+    location_filtered_jobs: list[dict[str, Any]]
+    out_of_scope_jobs: list[dict[str, Any]]
     opened_pages: list[dict[str, Any]]
     not_opened_jobs: list[dict[str, Any]]
     verified_jobs: list[dict[str, Any]]
@@ -343,40 +345,26 @@ class JobSearchState(TypedDict, total=False):
 # 5. Search regions
 # =========================================================
 
-DEFAULT_REGIONS = {
-    "North America": '"United States" OR USA OR Canada',
-    "Europe": '"United Kingdom" OR Germany OR Czechia OR Netherlands OR Poland OR Ireland OR Austria',
-    "Middle East": '"United Arab Emirates" OR UAE OR Dubai OR Abu Dhabi OR "Saudi Arabia" OR Riyadh OR Jeddah OR Qatar OR Kuwait OR Oman OR Bahrain',
+REGIONS = {
+    "Egypt": (
+        "Egypt OR Cairo OR Alexandria "
+        "jobs vacancies careers"
+    ),
+    "Europe": (
+        "Germany OR Czechia OR Netherlands OR Poland "
+        "OR Ireland OR Austria Europe jobs"
+    ),
+    "UAE": (
+        '"United Arab Emirates" OR UAE OR Dubai OR Abu Dhabi'
+    ),
+    "Saudi Arabia": (
+        '"Saudi Arabia" OR Riyadh OR Jeddah OR Dammam'
+    ),
+    "Other Gulf": (
+        'Qatar OR Kuwait OR Bahrain OR Oman '
+        'OR Doha OR Muscat'
+    ),
 }
-
-
-def load_search_regions() -> dict[str, str]:
-    """Load region -> search-keyword mappings from SEARCH_REGIONS_JSON.
-
-    Example value: {"Europe":"Germany OR Czechia", "Gulf":"UAE OR Saudi Arabia"}.
-    If the setting is empty, generic example regions are used.
-    """
-    raw = os.getenv("SEARCH_REGIONS_JSON", "").strip()
-    if not raw:
-        return dict(DEFAULT_REGIONS)
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError("SEARCH_REGIONS_JSON must be a valid JSON object.") from exc
-    if not isinstance(value, dict) or not value:
-        raise ValueError("SEARCH_REGIONS_JSON must be a non-empty JSON object of region names and query terms.")
-    regions: dict[str, str] = {}
-    for name, query in value.items():
-        clean_name = str(name).strip()
-        clean_query = str(query).strip()
-        if clean_name and clean_query:
-            regions[clean_name] = clean_query
-    if not regions:
-        raise ValueError("SEARCH_REGIONS_JSON did not contain any usable regions.")
-    return regions
-
-
-REGIONS = load_search_regions()
 
 
 # =========================================================
@@ -681,30 +669,51 @@ def _find_jobposting_schema(markup: str) -> dict[str, Any] | None:
 def _schema_location(schema: dict[str, Any] | None) -> str:
     if not schema:
         return "Not specified"
-    places = schema.get("jobLocation", [])
-    if isinstance(places, dict):
-        places = [places]
-    parts: list[str] = []
-    for place in places if isinstance(places, list) else []:
-        if not isinstance(place, dict):
-            continue
-        address = place.get("address", {})
-        if isinstance(address, str):
-            parts.append(address.strip())
-            continue
-        if not isinstance(address, dict):
-            continue
-        country = address.get("addressCountry", "")
-        if isinstance(country, dict):
-            country = country.get("name", "")
-        locality = address.get("addressLocality", "")
-        region = address.get("addressRegion", "")
-        value = ", ".join(str(x).strip() for x in (locality, region, country) if str(x).strip())
-        if value and value not in parts:
-            parts.append(value)
-    if schema.get("jobLocationType") == "TELECOMMUTE":
+
+    def location_values(items: Any) -> list[str]:
+        if isinstance(items, dict):
+            items = [items]
+        values: list[str] = []
+        for place in items if isinstance(items, list) else []:
+            if isinstance(place, str):
+                if place.strip() and place.strip() not in values:
+                    values.append(place.strip())
+                continue
+            if not isinstance(place, dict):
+                continue
+            if place.get("name"):
+                # applicantLocationRequirements often uses {"@type": "Country", "name": "Germany"}.
+                value = str(place.get("name") or "").strip()
+            else:
+                address = place.get("address", {})
+                if isinstance(address, str):
+                    value = address.strip()
+                elif isinstance(address, dict):
+                    country = address.get("addressCountry", "")
+                    if isinstance(country, dict):
+                        country = country.get("name", "")
+                    value = ", ".join(str(x).strip() for x in (
+                        address.get("addressLocality", ""),
+                        address.get("addressRegion", ""),
+                        country,
+                    ) if str(x).strip())
+                else:
+                    country = place.get("addressCountry", "")
+                    if isinstance(country, dict):
+                        country = country.get("name", "")
+                    value = str(country or "").strip()
+            if value and value not in values:
+                values.append(value)
+        return values
+
+    places = location_values(schema.get("jobLocation", []))
+    remote = str(schema.get("jobLocationType") or "").upper() == "TELECOMMUTE"
+    if remote:
+        eligibility = location_values(schema.get("applicantLocationRequirements", []))
+        if eligibility:
+            return "Remote (eligible countries: " + "; ".join(eligibility) + ")"
         return "Remote (verify eligible countries)"
-    return "; ".join(parts) if parts else "Not specified"
+    return "; ".join(places) if places else "Not specified"
 
 
 def _has_role_title_signal(job: dict[str, Any]) -> bool:
@@ -975,6 +984,7 @@ def _verification_result(job: dict[str, Any]) -> dict[str, Any]:
         schema_loc = _schema_location(schema)
         if schema_loc != "Not specified":
             result["location"] = schema_loc
+            result["location_source"] = "schema_jobposting"
         if schema.get("datePosted"):
             result["date_posted"] = str(schema.get("datePosted"))
         result.update(
@@ -1034,7 +1044,7 @@ def _verification_result(job: dict[str, Any]) -> dict[str, Any]:
 
 def verify_job_pages(state: JobSearchState) -> dict:
     """Open selected candidate URLs and preserve candidates omitted by the verification cap."""
-    all_jobs = state.get("unique_jobs", [])
+    all_jobs = state.get("location_filtered_jobs", state.get("unique_jobs", []))
     # Obvious listings can be classified locally and must still appear in the
     # audit workbook. They do not consume the HTTP verification budget.
     known_listing_jobs = [job for job in all_jobs if looks_like_listing_page(job)]
@@ -1317,8 +1327,14 @@ def infer_company(title: str, url: str, snippet: str = "") -> str:
             if candidate and candidate.lower() not in {"unknown", "company", "the company"}:
                 return candidate
     host = (urlparse(url).hostname or "").lower().removeprefix("www.")
-    # Do not maintain a hard-coded employer directory. Search-result titles are
-    # parsed above when explicit; otherwise use Unknown rather than guess.
+    known_hosts = {
+        "accenture.com": "Accenture", "redhat.com": "Red Hat", "etisalat.ae": "Etisalat",
+        "vodafone.com": "Vodafone", "reyrey.com": "Reynolds and Reynolds",
+        "cloudcops.jobs.personio.de": "CloudCops GmbH",
+    }
+    for domain, name in known_hosts.items():
+        if host == domain or host.endswith("." + domain):
+            return name
     return "Unknown company"
 
 
@@ -1342,6 +1358,342 @@ def infer_location(title: str, snippet: str = "") -> str:
         if re.search(pattern, text, re.IGNORECASE):
             return label
     return "Not specified"
+
+
+
+# =========================================================
+# Target-country filtering
+# =========================================================
+
+# These defaults mirror the intended search locations: Europe plus Egypt and the
+# configured UAE/Saudi/Gulf countries. Override with ALLOWED_JOB_COUNTRIES in .env.
+# The list of country names recognized by the detector is self-contained and does
+# not require installing another runtime dependency.
+EUROPE_TARGET_COUNTRIES = {
+    "Albania", "Andorra", "Armenia", "Austria", "Azerbaijan", "Belarus",
+    "Belgium", "Bosnia and Herzegovina", "Bulgaria", "Croatia", "Cyprus",
+    "Czechia", "Denmark", "Estonia", "Finland", "France", "Georgia",
+    "Germany", "Greece", "Hungary", "Iceland", "Ireland", "Italy", "Kosovo",
+    "Latvia", "Liechtenstein", "Lithuania", "Luxembourg", "Malta", "Moldova, Republic of",
+    "Monaco", "Montenegro", "Netherlands", "North Macedonia", "Norway",
+    "Poland", "Portugal", "Romania", "Russian Federation", "San Marino",
+    "Serbia", "Slovakia", "Slovenia", "Spain", "Sweden", "Switzerland",
+    "Türkiye", "Ukraine", "United Kingdom", "Holy See (Vatican City State)",
+}
+DEFAULT_ALLOWED_JOB_COUNTRIES = EUROPE_TARGET_COUNTRIES | {
+    "Egypt", "United Arab Emirates", "Saudi Arabia", "Qatar", "Kuwait", "Oman", "Bahrain"
+}
+
+COUNTRY_ALIAS_TO_CANONICAL: dict[str, str] = {'Afghanistan': 'Afghanistan', 'Albania': 'Albania', 'Algeria': 'Algeria', 'American Samoa': 'American Samoa', 'Andorra': 'Andorra', 'Angola': 'Angola', 'Anguilla': 'Anguilla', 'Antarctica': 'Antarctica', 'Antigua and Barbuda': 'Antigua and Barbuda', 'Arab Republic of Egypt': 'Egypt', 'Argentina': 'Argentina', 'Argentine Republic': 'Argentina', 'Armenia': 'Armenia', 'Aruba': 'Aruba', 'Australia': 'Australia', 'Austria': 'Austria', 'Azerbaijan': 'Azerbaijan', 'Bahamas': 'Bahamas', 'Bahrain': 'Bahrain', 'Bangladesh': 'Bangladesh', 'Barbados': 'Barbados', 'Belarus': 'Belarus', 'Belgium': 'Belgium', 'Belize': 'Belize', 'Benin': 'Benin', 'Bermuda': 'Bermuda', 'Bhutan': 'Bhutan', 'Bolivarian Republic of Venezuela': 'Venezuela, Bolivarian Republic of', 'Bolivia': 'Bolivia, Plurinational State of', 'Bolivia, Plurinational State of': 'Bolivia, Plurinational State of', 'Bonaire, Sint Eustatius and Saba': 'Bonaire, Sint Eustatius and Saba', 'Bosnia and Herzegovina': 'Bosnia and Herzegovina', 'Botswana': 'Botswana', 'Bouvet Island': 'Bouvet Island', 'Brazil': 'Brazil', 'Britain': 'United Kingdom', 'British Indian Ocean Territory': 'British Indian Ocean Territory', 'British Virgin Islands': 'Virgin Islands, British', 'Brunei': 'Brunei Darussalam', 'Brunei Darussalam': 'Brunei Darussalam', 'Bulgaria': 'Bulgaria', 'Burkina Faso': 'Burkina Faso', 'Burma': 'Myanmar', 'Burundi': 'Burundi', 'Cabo Verde': 'Cabo Verde', 'Cambodia': 'Cambodia', 'Cameroon': 'Cameroon', 'Canada': 'Canada', 'Cape Verde': 'Cabo Verde', 'Cayman Islands': 'Cayman Islands', 'Central African Republic': 'Central African Republic', 'Chad': 'Chad', 'Chile': 'Chile', 'China': 'China', 'Christmas Island': 'Christmas Island', 'Cocos (Keeling) Islands': 'Cocos (Keeling) Islands', 'Colombia': 'Colombia', 'Commonwealth of Dominica': 'Dominica', 'Commonwealth of the Bahamas': 'Bahamas', 'Commonwealth of the Northern Mariana Islands': 'Northern Mariana Islands', 'Comoros': 'Comoros', 'Congo': 'Congo', 'Congo, The Democratic Republic of the': 'Congo, The Democratic Republic of the', 'Cook Islands': 'Cook Islands', 'Costa Rica': 'Costa Rica', 'Croatia': 'Croatia', 'Cuba': 'Cuba', 'Curaçao': 'Curaçao', 'Cyprus': 'Cyprus', 'Czech Republic': 'Czechia', 'Czechia': 'Czechia', "Côte d'Ivoire": "Côte d'Ivoire", "Democratic People's Republic of Korea": "Korea, Democratic People's Republic of", 'Democratic Republic of Sao Tome and Principe': 'Sao Tome and Principe', 'Democratic Republic of Timor-Leste': 'Timor-Leste', 'Democratic Socialist Republic of Sri Lanka': 'Sri Lanka', 'Denmark': 'Denmark', 'Djibouti': 'Djibouti', 'Dominica': 'Dominica', 'Dominican Republic': 'Dominican Republic', 'East Timor': 'Timor-Leste', 'Eastern Republic of Uruguay': 'Uruguay', 'Ecuador': 'Ecuador', 'Egypt': 'Egypt', 'El Salvador': 'El Salvador', 'Emirates': 'United Arab Emirates', 'Equatorial Guinea': 'Equatorial Guinea', 'Eritrea': 'Eritrea', 'Estonia': 'Estonia', 'Eswatini': 'Eswatini', 'Ethiopia': 'Ethiopia', 'Falkland Islands (Malvinas)': 'Falkland Islands (Malvinas)', 'Faroe Islands': 'Faroe Islands', 'Federal Democratic Republic of Ethiopia': 'Ethiopia', 'Federal Democratic Republic of Nepal': 'Nepal', 'Federal Republic of Germany': 'Germany', 'Federal Republic of Nigeria': 'Nigeria', 'Federal Republic of Somalia': 'Somalia', 'Federated States of Micronesia': 'Micronesia, Federated States of', 'Federative Republic of Brazil': 'Brazil', 'Fiji': 'Fiji', 'Finland': 'Finland', 'France': 'France', 'French Guiana': 'French Guiana', 'French Polynesia': 'French Polynesia', 'French Republic': 'France', 'French Southern Territories': 'French Southern Territories', 'Gabon': 'Gabon', 'Gabonese Republic': 'Gabon', 'Gambia': 'Gambia', 'Georgia': 'Georgia', 'Germany': 'Germany', 'Ghana': 'Ghana', 'Gibraltar': 'Gibraltar', 'Grand Duchy of Luxembourg': 'Luxembourg', 'Great Britain': 'United Kingdom', 'Greece': 'Greece', 'Greenland': 'Greenland', 'Grenada': 'Grenada', 'Guadeloupe': 'Guadeloupe', 'Guam': 'Guam', 'Guatemala': 'Guatemala', 'Guernsey': 'Guernsey', 'Guinea': 'Guinea', 'Guinea-Bissau': 'Guinea-Bissau', 'Guyana': 'Guyana', 'Haiti': 'Haiti', 'Hashemite Kingdom of Jordan': 'Jordan', 'Heard Island and McDonald Islands': 'Heard Island and McDonald Islands', 'Hellenic Republic': 'Greece', 'Holy See (Vatican City State)': 'Holy See (Vatican City State)', 'Honduras': 'Honduras', 'Hong Kong': 'Hong Kong', 'Hong Kong Special Administrative Region of China': 'Hong Kong', 'Hungary': 'Hungary', 'Iceland': 'Iceland', 'Independent State of Papua New Guinea': 'Papua New Guinea', 'Independent State of Samoa': 'Samoa', 'India': 'India', 'Indonesia': 'Indonesia', 'Iran': 'Iran, Islamic Republic of', 'Iran, Islamic Republic of': 'Iran, Islamic Republic of', 'Iraq': 'Iraq', 'Ireland': 'Ireland', 'Islamic Republic of Afghanistan': 'Afghanistan', 'Islamic Republic of Iran': 'Iran, Islamic Republic of', 'Islamic Republic of Mauritania': 'Mauritania', 'Islamic Republic of Pakistan': 'Pakistan', 'Isle of Man': 'Isle of Man', 'Israel': 'Israel', 'Italian Republic': 'Italy', 'Italy': 'Italy', 'Ivory Coast': "Côte d'Ivoire", 'Jamaica': 'Jamaica', 'Japan': 'Japan', 'Jersey': 'Jersey', 'Jordan': 'Jordan', 'Kazakhstan': 'Kazakhstan', 'Kenya': 'Kenya', 'Kingdom of Bahrain': 'Bahrain', 'Kingdom of Belgium': 'Belgium', 'Kingdom of Bhutan': 'Bhutan', 'Kingdom of Cambodia': 'Cambodia', 'Kingdom of Denmark': 'Denmark', 'Kingdom of Eswatini': 'Eswatini', 'Kingdom of Lesotho': 'Lesotho', 'Kingdom of Morocco': 'Morocco', 'Kingdom of Norway': 'Norway', 'Kingdom of Saudi Arabia': 'Saudi Arabia', 'Kingdom of Spain': 'Spain', 'Kingdom of Sweden': 'Sweden', 'Kingdom of Thailand': 'Thailand', 'Kingdom of the Netherlands': 'Netherlands', 'Kingdom of Tonga': 'Tonga', 'Kiribati': 'Kiribati', "Korea, Democratic People's Republic of": "Korea, Democratic People's Republic of", 'Korea, Republic of': 'Korea, Republic of', 'Kosovo': 'Kosovo', 'KSA': 'Saudi Arabia', 'Kuwait': 'Kuwait', 'Kyrgyz Republic': 'Kyrgyzstan', 'Kyrgyzstan': 'Kyrgyzstan', "Lao People's Democratic Republic": "Lao People's Democratic Republic", 'Laos': "Lao People's Democratic Republic", 'Latvia': 'Latvia', 'Lebanese Republic': 'Lebanon', 'Lebanon': 'Lebanon', 'Lesotho': 'Lesotho', 'Liberia': 'Liberia', 'Libya': 'Libya', 'Liechtenstein': 'Liechtenstein', 'Lithuania': 'Lithuania', 'Luxembourg': 'Luxembourg', 'Macao': 'Macao', 'Macao Special Administrative Region of China': 'Macao', 'Macedonia': 'North Macedonia', 'Madagascar': 'Madagascar', 'Malawi': 'Malawi', 'Malaysia': 'Malaysia', 'Maldives': 'Maldives', 'Mali': 'Mali', 'Malta': 'Malta', 'Marshall Islands': 'Marshall Islands', 'Martinique': 'Martinique', 'Mauritania': 'Mauritania', 'Mauritius': 'Mauritius', 'Mayotte': 'Mayotte', 'Mexico': 'Mexico', 'Micronesia': 'Micronesia, Federated States of', 'Micronesia, Federated States of': 'Micronesia, Federated States of', 'Moldova': 'Moldova, Republic of', 'Moldova, Republic of': 'Moldova, Republic of', 'Monaco': 'Monaco', 'Mongolia': 'Mongolia', 'Montenegro': 'Montenegro', 'Montserrat': 'Montserrat', 'Morocco': 'Morocco', 'Mozambique': 'Mozambique', 'Myanmar': 'Myanmar', 'Namibia': 'Namibia', 'Nauru': 'Nauru', 'Nepal': 'Nepal', 'Netherlands': 'Netherlands', 'New Caledonia': 'New Caledonia', 'New Zealand': 'New Zealand', 'Nicaragua': 'Nicaragua', 'Niger': 'Niger', 'Nigeria': 'Nigeria', 'Niue': 'Niue', 'Norfolk Island': 'Norfolk Island', 'North Korea': "Korea, Democratic People's Republic of", 'North Macedonia': 'North Macedonia', 'Northern Mariana Islands': 'Northern Mariana Islands', 'Norway': 'Norway', 'Oman': 'Oman', 'Pakistan': 'Pakistan', 'Palau': 'Palau', 'Palestine': 'Palestine, State of', 'Palestine, State of': 'Palestine, State of', 'Panama': 'Panama', 'Papua New Guinea': 'Papua New Guinea', 'Paraguay': 'Paraguay', "People's Democratic Republic of Algeria": 'Algeria', "People's Republic of Bangladesh": 'Bangladesh', "People's Republic of China": 'China', 'Peru': 'Peru', 'Philippines': 'Philippines', 'Pitcairn': 'Pitcairn', 'Plurinational State of Bolivia': 'Bolivia, Plurinational State of', 'Poland': 'Poland', 'Portugal': 'Portugal', 'Portuguese Republic': 'Portugal', 'Principality of Andorra': 'Andorra', 'Principality of Liechtenstein': 'Liechtenstein', 'Principality of Monaco': 'Monaco', 'Puerto Rico': 'Puerto Rico', 'Qatar': 'Qatar', 'Republic of Albania': 'Albania', 'Republic of Angola': 'Angola', 'Republic of Armenia': 'Armenia', 'Republic of Austria': 'Austria', 'Republic of Azerbaijan': 'Azerbaijan', 'Republic of Belarus': 'Belarus', 'Republic of Benin': 'Benin', 'Republic of Bosnia and Herzegovina': 'Bosnia and Herzegovina', 'Republic of Botswana': 'Botswana', 'Republic of Bulgaria': 'Bulgaria', 'Republic of Burundi': 'Burundi', 'Republic of Cabo Verde': 'Cabo Verde', 'Republic of Cameroon': 'Cameroon', 'Republic of Chad': 'Chad', 'Republic of Chile': 'Chile', 'Republic of Colombia': 'Colombia', 'Republic of Costa Rica': 'Costa Rica', 'Republic of Croatia': 'Croatia', 'Republic of Cuba': 'Cuba', 'Republic of Cyprus': 'Cyprus', "Republic of Côte d'Ivoire": "Côte d'Ivoire", 'Republic of Djibouti': 'Djibouti', 'Republic of Ecuador': 'Ecuador', 'Republic of El Salvador': 'El Salvador', 'Republic of Equatorial Guinea': 'Equatorial Guinea', 'Republic of Estonia': 'Estonia', 'Republic of Fiji': 'Fiji', 'Republic of Finland': 'Finland', 'Republic of Ghana': 'Ghana', 'Republic of Guatemala': 'Guatemala', 'Republic of Guinea': 'Guinea', 'Republic of Guinea-Bissau': 'Guinea-Bissau', 'Republic of Guyana': 'Guyana', 'Republic of Haiti': 'Haiti', 'Republic of Honduras': 'Honduras', 'Republic of Iceland': 'Iceland', 'Republic of India': 'India', 'Republic of Indonesia': 'Indonesia', 'Republic of Iraq': 'Iraq', 'Republic of Kazakhstan': 'Kazakhstan', 'Republic of Kenya': 'Kenya', 'Republic of Kiribati': 'Kiribati', 'Republic of Korea': 'Korea, Republic of', 'Republic of Latvia': 'Latvia', 'Republic of Liberia': 'Liberia', 'Republic of Lithuania': 'Lithuania', 'Republic of Madagascar': 'Madagascar', 'Republic of Malawi': 'Malawi', 'Republic of Maldives': 'Maldives', 'Republic of Mali': 'Mali', 'Republic of Malta': 'Malta', 'Republic of Mauritius': 'Mauritius', 'Republic of Moldova': 'Moldova, Republic of', 'Republic of Mozambique': 'Mozambique', 'Republic of Myanmar': 'Myanmar', 'Republic of Namibia': 'Namibia', 'Republic of Nauru': 'Nauru', 'Republic of Nicaragua': 'Nicaragua', 'Republic of North Macedonia': 'North Macedonia', 'Republic of Palau': 'Palau', 'Republic of Panama': 'Panama', 'Republic of Paraguay': 'Paraguay', 'Republic of Peru': 'Peru', 'Republic of Poland': 'Poland', 'Republic of San Marino': 'San Marino', 'Republic of Senegal': 'Senegal', 'Republic of Serbia': 'Serbia', 'Republic of Seychelles': 'Seychelles', 'Republic of Sierra Leone': 'Sierra Leone', 'Republic of Singapore': 'Singapore', 'Republic of Slovenia': 'Slovenia', 'Republic of South Africa': 'South Africa', 'Republic of South Sudan': 'South Sudan', 'Republic of Suriname': 'Suriname', 'Republic of Tajikistan': 'Tajikistan', 'Republic of the Congo': 'Congo', 'Republic of the Gambia': 'Gambia', 'Republic of the Marshall Islands': 'Marshall Islands', 'Republic of the Niger': 'Niger', 'Republic of the Philippines': 'Philippines', 'Republic of the Sudan': 'Sudan', 'Republic of Trinidad and Tobago': 'Trinidad and Tobago', 'Republic of Tunisia': 'Tunisia', 'Republic of Türkiye': 'Türkiye', 'Republic of Uganda': 'Uganda', 'Republic of Uzbekistan': 'Uzbekistan', 'Republic of Vanuatu': 'Vanuatu', 'Republic of Yemen': 'Yemen', 'Republic of Zambia': 'Zambia', 'Republic of Zimbabwe': 'Zimbabwe', 'Romania': 'Romania', 'Russia': 'Russian Federation', 'Russian Federation': 'Russian Federation', 'Rwanda': 'Rwanda', 'Rwandese Republic': 'Rwanda', 'Réunion': 'Réunion', 'Saint Barthélemy': 'Saint Barthélemy', 'Saint Helena, Ascension and Tristan da Cunha': 'Saint Helena, Ascension and Tristan da Cunha', 'Saint Kitts and Nevis': 'Saint Kitts and Nevis', 'Saint Lucia': 'Saint Lucia', 'Saint Martin (French part)': 'Saint Martin (French part)', 'Saint Pierre and Miquelon': 'Saint Pierre and Miquelon', 'Saint Vincent and the Grenadines': 'Saint Vincent and the Grenadines', 'Samoa': 'Samoa', 'San Marino': 'San Marino', 'Sao Tome and Principe': 'Sao Tome and Principe', 'Saudi Arabia': 'Saudi Arabia', 'Senegal': 'Senegal', 'Serbia': 'Serbia', 'Seychelles': 'Seychelles', 'Sierra Leone': 'Sierra Leone', 'Singapore': 'Singapore', 'Sint Maarten (Dutch part)': 'Sint Maarten (Dutch part)', 'Slovak Republic': 'Slovakia', 'Slovakia': 'Slovakia', 'Slovenia': 'Slovenia', 'Socialist Republic of Viet Nam': 'Viet Nam', 'Solomon Islands': 'Solomon Islands', 'Somalia': 'Somalia', 'South Africa': 'South Africa', 'South Georgia and the South Sandwich Islands': 'South Georgia and the South Sandwich Islands', 'South Korea': 'Korea, Republic of', 'South Sudan': 'South Sudan', 'Spain': 'Spain', 'Sri Lanka': 'Sri Lanka', 'State of Israel': 'Israel', 'State of Kuwait': 'Kuwait', 'State of Qatar': 'Qatar', 'Sudan': 'Sudan', 'Sultanate of Oman': 'Oman', 'Suriname': 'Suriname', 'Svalbard and Jan Mayen': 'Svalbard and Jan Mayen', 'Swaziland': 'Eswatini', 'Sweden': 'Sweden', 'Swiss Confederation': 'Switzerland', 'Switzerland': 'Switzerland', 'Syria': 'Syrian Arab Republic', 'Syrian Arab Republic': 'Syrian Arab Republic', 'Taiwan': 'Taiwan, Province of China', 'Taiwan, Province of China': 'Taiwan, Province of China', 'Tajikistan': 'Tajikistan', 'Tanzania': 'Tanzania, United Republic of', 'Tanzania, United Republic of': 'Tanzania, United Republic of', 'Thailand': 'Thailand', 'The Netherlands': 'Netherlands', 'the State of Eritrea': 'Eritrea', 'the State of Palestine': 'Palestine, State of', 'Timor-Leste': 'Timor-Leste', 'Togo': 'Togo', 'Togolese Republic': 'Togo', 'Tokelau': 'Tokelau', 'Tonga': 'Tonga', 'Trinidad and Tobago': 'Trinidad and Tobago', 'Tunisia': 'Tunisia', 'Turkey': 'Türkiye', 'Turkmenistan': 'Turkmenistan', 'Turks and Caicos Islands': 'Turks and Caicos Islands', 'Tuvalu': 'Tuvalu', 'Türkiye': 'Türkiye', 'U.S.': 'United States', 'U.S.A.': 'United States', 'UAE': 'United Arab Emirates', 'Uganda': 'Uganda', 'UK': 'United Kingdom', 'Ukraine': 'Ukraine', 'Union of the Comoros': 'Comoros', 'United Arab Emirates': 'United Arab Emirates', 'United Kingdom': 'United Kingdom', 'United Kingdom of Great Britain and Northern Ireland': 'United Kingdom', 'United Mexican States': 'Mexico', 'United Republic of Tanzania': 'Tanzania, United Republic of', 'United States': 'United States', 'United States Minor Outlying Islands': 'United States Minor Outlying Islands', 'United States of America': 'United States', 'Uruguay': 'Uruguay', 'USA': 'United States', 'Uzbekistan': 'Uzbekistan', 'Vanuatu': 'Vanuatu', 'Venezuela': 'Venezuela, Bolivarian Republic of', 'Venezuela, Bolivarian Republic of': 'Venezuela, Bolivarian Republic of', 'Viet Nam': 'Viet Nam', 'Vietnam': 'Viet Nam', 'Virgin Islands of the United States': 'Virgin Islands, U.S.', 'Virgin Islands, British': 'Virgin Islands, British', 'Virgin Islands, U.S.': 'Virgin Islands, U.S.', 'Wallis and Futuna': 'Wallis and Futuna', 'Western Sahara': 'Western Sahara', 'Yemen': 'Yemen', 'Zambia': 'Zambia', 'Zimbabwe': 'Zimbabwe', 'Åland Islands': 'Åland Islands'}
+
+COUNTRY_ALIAS_TO_CANONICAL.update({"Vatican City": "Holy See (Vatican City State)", "Vatican": "Holy See (Vatican City State)"})
+
+
+def _location_key(value: str) -> str:
+    return " ".join(str(value or "").casefold().replace("’", "'").split()).strip(" ,.;:()[]{}")
+
+
+def _canonical_country(value: str) -> str | None:
+    """Map a country name or common alias to a canonical display name."""
+    key = _location_key(value)
+    direct = COUNTRY_ALIAS_TO_CANONICAL.get(key)
+    if direct:
+        return direct
+    for alias, canonical in COUNTRY_ALIAS_TO_CANONICAL.items():
+        if _location_key(alias) == key:
+            return canonical
+    if key == "europe":
+        return "Europe"
+    return None
+
+
+_ALLOWED_COUNTRIES_RAW = os.getenv("ALLOWED_JOB_COUNTRIES", "").strip()
+ALLOW_EUROPE_REGION = (not _ALLOWED_COUNTRIES_RAW) or any(
+    _location_key(part) == "europe" for part in _ALLOWED_COUNTRIES_RAW.split(",")
+)
+if _ALLOWED_COUNTRIES_RAW:
+    ALLOWED_JOB_COUNTRIES = {
+        canonical
+        for part in _ALLOWED_COUNTRIES_RAW.split(",")
+        if (canonical := _canonical_country(part.strip()))
+    }
+    if "Europe" in {_location_key(part) for part in _ALLOWED_COUNTRIES_RAW.split(",")}:
+        ALLOWED_JOB_COUNTRIES |= EUROPE_TARGET_COUNTRIES
+else:
+    ALLOWED_JOB_COUNTRIES = set(DEFAULT_ALLOWED_JOB_COUNTRIES)
+
+# City clues matter because many search snippets and LinkedIn titles omit country names.
+CITY_TO_COUNTRY = {
+    # Target locations
+    "brno": "Czechia", "prague": "Czechia", "ostrava": "Czechia",
+    "berlin": "Germany", "munich": "Germany", "münchen": "Germany", "hamburg": "Germany", "frankfurt": "Germany", "stuttgart": "Germany", "cologne": "Germany", "düsseldorf": "Germany", "dusseldorf": "Germany", "leipzig": "Germany", "dresden": "Germany",
+    "amsterdam": "Netherlands", "rotterdam": "Netherlands", "utrecht": "Netherlands", "eindhoven": "Netherlands", "the hague": "Netherlands",
+    "warsaw": "Poland", "krakow": "Poland", "cracow": "Poland", "wroclaw": "Poland", "wrocław": "Poland", "gdansk": "Poland", "gdańsk": "Poland", "poznan": "Poland", "poznań": "Poland", "lodz": "Poland", "łódź": "Poland",
+    "dublin": "Ireland", "cork": "Ireland", "galway": "Ireland", "limerick": "Ireland",
+    "vienna": "Austria", "wien": "Austria", "graz": "Austria", "linz": "Austria", "salzburg": "Austria",
+    "paris": "France", "lyon": "France", "marseille": "France", "toulouse": "France", "lille": "France",
+    "london": "United Kingdom", "manchester": "United Kingdom", "birmingham": "United Kingdom", "edinburgh": "United Kingdom", "glasgow": "United Kingdom", "bristol": "United Kingdom", "leeds": "United Kingdom", "belfast": "United Kingdom",
+    "madrid": "Spain", "barcelona": "Spain", "valencia": "Spain", "seville": "Spain", "lisbon": "Portugal", "porto": "Portugal", "rome": "Italy", "milan": "Italy", "turin": "Italy", "bologna": "Italy", "brussels": "Belgium", "antwerp": "Belgium", "ghent": "Belgium", "luxembourg city": "Luxembourg", "copenhagen": "Denmark", "aarhus": "Denmark", "oslo": "Norway", "bergen": "Norway", "stockholm": "Sweden", "gothenburg": "Sweden", "helsinki": "Finland", "tampere": "Finland", "tallinn": "Estonia", "riga": "Latvia", "vilnius": "Lithuania", "zurich": "Switzerland", "zürich": "Switzerland", "geneva": "Switzerland", "basel": "Switzerland", "bern": "Switzerland", "budapest": "Hungary", "bucharest": "Romania", "sofia": "Bulgaria", "athens": "Greece", "zagreb": "Croatia", "belgrade": "Serbia", "bratislava": "Slovakia", "ljubljana": "Slovenia", "sarajevo": "Bosnia and Herzegovina", "skopje": "North Macedonia", "tirana": "Albania", "kyiv": "Ukraine", "kiev": "Ukraine", "istanbul": "Türkiye", "ankara": "Türkiye",
+    "cairo": "Egypt", "alexandria": "Egypt", "giza": "Egypt",
+    "dubai": "United Arab Emirates", "abu dhabi": "United Arab Emirates", "sharjah": "United Arab Emirates", "ajman": "United Arab Emirates",
+    "riyadh": "Saudi Arabia", "jeddah": "Saudi Arabia", "dammam": "Saudi Arabia", "khobar": "Saudi Arabia", "al khobar": "Saudi Arabia", "makkah": "Saudi Arabia", "mecca": "Saudi Arabia", "medina": "Saudi Arabia", "madinah": "Saudi Arabia",
+    "doha": "Qatar", "kuwait city": "Kuwait", "muscat": "Oman", "manama": "Bahrain",
+    # Frequently indexed non-target locations that need to be filtered
+    "bengaluru": "India", "bangalore": "India", "hyderabad": "India", "mumbai": "India", "bombay": "India", "pune": "India", "chennai": "India", "madras": "India", "delhi": "India", "new delhi": "India", "gurugram": "India", "gurgaon": "India", "noida": "India", "kolkata": "India", "calcutta": "India", "ahmedabad": "India", "kochi": "India", "cochin": "India", "jaipur": "India", "indore": "India", "visakhapatnam": "India",
+    "islamabad": "Pakistan", "lahore": "Pakistan", "karachi": "Pakistan", "rawalpindi": "Pakistan", "faisalabad": "Pakistan", "peshawar": "Pakistan", "multan": "Pakistan",
+    "dhaka": "Bangladesh", "chittagong": "Bangladesh", "chattogram": "Bangladesh", "colombo": "Sri Lanka", "kandy": "Sri Lanka", "kathmandu": "Nepal", "singapore": "Singapore", "kuala lumpur": "Malaysia", "penang": "Malaysia", "manila": "Philippines", "cebu": "Philippines", "jakarta": "Indonesia", "bangkok": "Thailand", "hanoi": "Viet Nam", "ho chi minh city": "Viet Nam", "tokyo": "Japan", "osaka": "Japan", "beijing": "China", "shanghai": "China", "shenzhen": "China", "hong kong": "Hong Kong", "taipei": "Taiwan, Province of China", "seoul": "Korea, Republic of", "busan": "Korea, Republic of",
+    "new york": "United States", "san francisco": "United States", "los angeles": "United States", "seattle": "United States", "austin": "United States", "boston": "United States", "chicago": "United States", "dallas": "United States", "atlanta": "United States", "washington dc": "United States", "washington, dc": "United States", "houston": "United States", "miami": "United States", "denver": "United States", "raleigh": "United States", "toronto": "Canada", "vancouver": "Canada", "montreal": "Canada", "ottawa": "Canada", "sydney": "Australia", "melbourne": "Australia", "brisbane": "Australia", "perth": "Australia", "auckland": "New Zealand", "wellington": "New Zealand", "mexico city": "Mexico", "sao paulo": "Brazil", "rio de janeiro": "Brazil", "johannesburg": "South Africa", "cape town": "South Africa", "nairobi": "Kenya", "lagos": "Nigeria", "abuja": "Nigeria",
+}
+
+
+def _detect_country_or_region(text: str) -> tuple[str | None, str | None]:
+    """Return the earliest unambiguous country/city/Europe clue in a short location-bearing text."""
+    text = str(text or "")
+    if not text.strip():
+        return None, None
+    candidates: list[tuple[int, int, str, str]] = []
+    # Use countries and aliases, longest match wins when two names begin at the same position.
+    aliases = sorted(COUNTRY_ALIAS_TO_CANONICAL.items(), key=lambda item: len(item[0]), reverse=True)
+    for alias, canonical in aliases:
+        if not alias or len(alias) < 3:
+            continue
+        try:
+            pattern = r"(?<![A-Za-z])" + re.escape(alias) + r"(?![A-Za-z])"
+            for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+                candidates.append((match.start(), -len(alias), canonical, alias))
+        except re.error:
+            continue
+    for city, canonical in CITY_TO_COUNTRY.items():
+        if len(city) < 3:
+            continue
+        pattern = r"(?<![A-Za-z])" + re.escape(city) + r"(?![A-Za-z])"
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            candidates.append((match.start(), -len(city), canonical, city))
+    europe = re.search(r"(?<![A-Za-z])Europe(?![A-Za-z])", text, flags=re.IGNORECASE)
+    if europe:
+        candidates.append((europe.start(), -6, "Europe", "Europe"))
+    # Deliberately avoid the ambiguous bare token "US"; full country names, USA and U.S. are supported.
+    if not candidates:
+        return None, None
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    _, _, country, alias = candidates[0]
+    return country, alias
+
+
+_LINKEDIN_LOCALE_COUNTRIES = {
+    "in": "India", "pk": "Pakistan", "bd": "Bangladesh", "lk": "Sri Lanka",
+    "sg": "Singapore", "my": "Malaysia", "ph": "Philippines", "id": "Indonesia",
+    "th": "Thailand", "vn": "Viet Nam", "jp": "Japan", "kr": "Korea, Republic of",
+    "cn": "China", "hk": "Hong Kong", "tw": "Taiwan, Province of China",
+    "us": "United States", "ca": "Canada", "au": "Australia", "nz": "New Zealand",
+    "de": "Germany", "cz": "Czechia", "nl": "Netherlands", "pl": "Poland",
+    "ie": "Ireland", "at": "Austria", "fr": "France", "es": "Spain", "it": "Italy",
+    "pt": "Portugal", "be": "Belgium", "ch": "Switzerland", "se": "Sweden",
+    "no": "Norway", "dk": "Denmark", "fi": "Finland", "gb": "United Kingdom",
+    "uk": "United Kingdom", "eg": "Egypt", "ae": "United Arab Emirates", "sa": "Saudi Arabia",
+    "qa": "Qatar", "kw": "Kuwait", "om": "Oman", "bh": "Bahrain", "jo": "Jordan",
+}
+
+
+def _job_location_evidence(job: dict[str, Any]) -> tuple[str | None, str]:
+    """Find the most likely primary job location without treating search region as evidence."""
+    # A structured JobPosting location extracted from the actual page is strongest.
+    if str(job.get("location_source") or "") == "schema_jobposting":
+        country, alias = _detect_country_or_region(str(job.get("location") or ""))
+        if country:
+            return country, f"structured JobPosting location ({alias})"
+
+    # If the actual page opened, prefer labelled work-location fields to search-result clues.
+    opened_text = str(job.get("opened_page_text") or "")
+    if opened_text:
+        context_patterns = (
+            r"(?:primary\s+)?(?:job\s+)?location\s*[:\-]\s*([^\n|;]{2,140})",
+            r"(?:work\s+location|office\s+location|location\s+of\s+the\s+role)\s*[:\-]?\s*([^\n|;]{2,140})",
+            r"(?:position|role|job)\s+(?:is\s+)?based\s+in\s+([^\n|;]{2,100})",
+            r"(?:this\s+role|the\s+position|the\s+job)\s+is\s+(?:located|based)\s+in\s+([^\n|;]{2,100})",
+            r"(?:remote|hybrid|on.site)\s+(?:role|position|job)?\s*(?:in|within|across)\s+([^\n|;]{2,100})",
+        )
+        for pattern in context_patterns:
+            match = re.search(pattern, opened_text, flags=re.IGNORECASE)
+            if match:
+                country, alias = _detect_country_or_region(match.group(1))
+                if country:
+                    return country, f"opened-page location field ({alias})"
+
+    # The indexed headline often carries the job's actual city/country.
+    country, alias = _detect_country_or_region(str(job.get("title") or ""))
+    if country:
+        return country, f"job title ({alias})"
+
+    # LinkedIn locale host is a useful fallback when its result title omits location.
+    try:
+        host = (urlparse(str(job.get("url") or "")).hostname or "").lower()
+        pieces = host.split(".")
+        if len(pieces) >= 3 and pieces[-2:] == ["linkedin", "com"]:
+            locale = pieces[0]
+            if locale in _LINKEDIN_LOCALE_COUNTRIES:
+                return _LINKEDIN_LOCALE_COUNTRIES[locale], f"LinkedIn locale subdomain ({locale})"
+    except Exception:
+        pass
+
+    # Use a populated location field, but never the search task's region label.
+    current_location = str(job.get("location") or "").strip()
+    region_label = str(job.get("region") or "").strip()
+    # Older tracker versions copied the search region into Location (e.g. Egypt or Europe).
+    # If the two fields are identical and there is no structured page location, do not trust it.
+    legacy_region_only = bool(region_label and current_location.casefold() == region_label.casefold()
+                              and str(job.get("location_source") or "") != "schema_jobposting")
+    if current_location and not legacy_region_only and current_location.lower() not in {
+        "not specified", "unknown", "remote (verify eligible countries)", "remote", "all configured regions"
+    }:
+        country, alias = _detect_country_or_region(current_location)
+        if country:
+            return country, f"job location field ({alias})"
+
+    country, alias = _detect_country_or_region(str(job.get("verified_page_title") or ""))
+    if country:
+        return country, f"opened page title ({alias})"
+
+    # Search snippets/page opening are weaker evidence; try a location-labelled phrase first.
+    page_text = opened_text or str(job.get("description") or "")
+    context_patterns = (
+        r"(?:primary\s+)?(?:job\s+)?location\s*[:\-]\s*([^\n|;]{2,140})",
+        r"(?:work\s+location|office\s+location|location\s+of\s+the\s+role)\s*[:\-]?\s*([^\n|;]{2,140})",
+        r"(?:based|located|position|role)\s+in\s+([^\n|;]{2,100})",
+        r"(?:remote|hybrid|on.site)\s+(?:role|position|job)?\s*(?:in|within|across)\s+([^\n|;]{2,100})",
+    )
+    for pattern in context_patterns:
+        match = re.search(pattern, page_text, flags=re.IGNORECASE)
+        if match:
+            country, alias = _detect_country_or_region(match.group(1))
+            if country:
+                return country, f"location context ({alias})"
+
+    country, alias = _detect_country_or_region(page_text[:1000])
+    if country:
+        return country, f"search snippet/page opening ({alias})"
+    return None, "No reliable primary location was found in the title, URL locale, location field, or page text."
+
+
+def _location_is_allowed(country: str | None) -> bool:
+    if not country:
+        return False
+    canonical = _canonical_country(country) or country
+    if canonical == "Europe":
+        return ALLOW_EUROPE_REGION
+    return canonical in ALLOWED_JOB_COUNTRIES
+
+
+def filter_target_locations_before_verification(state: JobSearchState) -> dict:
+    """Pre-filter clearly out-of-scope locations before spending time opening URLs.
+
+    Unknown locations are intentionally kept for page verification; the search task's
+    region is never assumed to be the job's actual location.
+    """
+    candidates = state.get("unique_jobs", [])
+    retained: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+    for original in candidates:
+        job = dict(original)
+        country, evidence = _job_location_evidence(job)
+        if country and not _location_is_allowed(country):
+            job["location"] = country if str(job.get("location") or "Not specified").lower() in {"", "not specified", "unknown"} else job.get("location")
+            job["verification_status"] = "out_of_scope_location"
+            job["location_filter_status"] = "out_of_scope"
+            job["verification_reason"] = f"Excluded before opening URL because the primary job-location signal is {country}, outside ALLOWED_JOB_COUNTRIES. Evidence: {evidence}."
+            excluded.append(job)
+            counts[country] = counts.get(country, 0) + 1
+        else:
+            job["location_filter_status"] = "allowed" if country and _location_is_allowed(country) else "unknown_pending_page_check"
+            if country:
+                job["detected_location_country"] = country
+                if str(job.get("location") or "Not specified").lower() in {"", "not specified", "unknown"}:
+                    job["location"] = country
+            retained.append(job)
+    logger.info("Location pre-filter: %d kept for URL verification, %d explicitly out of scope: %s; unknown locations are retained for page-level checking.", len(retained), len(excluded), counts)
+    return {"location_filtered_jobs": retained, "out_of_scope_jobs": excluded}
+
+
+def enforce_target_locations_after_verification(state: JobSearchState) -> dict:
+    """Apply the same country allow-list to opened vacancy pages before categorization/scoring."""
+    verified: list[dict[str, Any]] = []
+    reviews: list[dict[str, Any]] = []
+    excluded = list(state.get("excluded_pages", []))
+    out_of_scope = list(state.get("out_of_scope_jobs", []))
+    seen_outside = {normalize_url(str(job.get("url") or "")) for job in out_of_scope}
+
+    def move_out(job: dict[str, Any], country: str, evidence: str) -> None:
+        url = normalize_url(str(job.get("url") or ""))
+        job.update({
+            "location": country,
+            "verification_status": "out_of_scope_location",
+            "location_filter_status": "out_of_scope",
+            "verification_reason": f"Excluded after opening/classifying the vacancy because its primary location is {country}, outside ALLOWED_JOB_COUNTRIES. Evidence: {evidence}.",
+            "fit_score": None,
+            "recommended": False,
+        })
+        if url not in seen_outside:
+            out_of_scope.append(job)
+            excluded.append(job)
+            seen_outside.add(url)
+
+    for original in state.get("verified_jobs", []):
+        job = dict(original)
+        country, evidence = _job_location_evidence(job)
+        if country and not _location_is_allowed(country):
+            move_out(job, country, evidence)
+        elif not country:
+            job["verification_status"] = "review_required"
+            job["location_filter_status"] = "unknown_manual_review"
+            job["verification_reason"] = "The page appears to be an individual vacancy, but its primary work location could not be verified against ALLOWED_JOB_COUNTRIES. It was not scored; review the location manually."
+            reviews.append(job)
+        else:
+            job["location_filter_status"] = "allowed"
+            job["detected_location_country"] = country
+            if str(job.get("location") or "Not specified").lower() in {"", "not specified", "unknown"}:
+                job["location"] = country
+            verified.append(job)
+
+    for original in state.get("review_required_jobs", []):
+        job = dict(original)
+        country, evidence = _job_location_evidence(job)
+        if country and not _location_is_allowed(country):
+            move_out(job, country, evidence)
+        else:
+            reviews.append(job)
+
+    # URL-verification-cap leftovers also need a visible manual-review path.
+    for original in state.get("not_opened_jobs", []):
+        job = dict(original)
+        country, evidence = _job_location_evidence(job)
+        if country and not _location_is_allowed(country):
+            move_out(job, country, evidence)
+        else:
+            job["verification_status"] = "review_required"
+            if not job.get("verification_reason"):
+                job["verification_reason"] = "This URL was not opened because the verification limit was reached; verify both the vacancy and its primary location manually."
+            reviews.append(job)
+
+    def unique(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result: dict[str, dict[str, Any]] = {}
+        for job in rows:
+            url = normalize_url(str(job.get("url") or ""))
+            if url:
+                result.setdefault(url, job)
+        return list(result.values())
+
+    verified = unique(verified)
+    reviews = unique(reviews)
+    excluded = unique(excluded)
+    out_of_scope = unique(out_of_scope)
+    logger.info("Location filter complete: %d target-location vacancies retained for scoring; %d URLs kept for manual review; %d out-of-scope URLs excluded.", len(verified), len(reviews), len(out_of_scope))
+    return {
+        "verified_jobs": verified,
+        "review_required_jobs": reviews,
+        "excluded_pages": excluded,
+        "out_of_scope_jobs": out_of_scope,
+    }
 
 
 def initialize_database() -> None:
@@ -1410,6 +1762,42 @@ def initialize_database() -> None:
                 [(url,) for url in listing_urls],
             )
             logger.info("Disabled %d previously saved search/listing page(s).", len(listing_urls))
+
+        # Recheck historical eligible rows against the configured country allow-list.
+        # This prevents a previously scored India/Pakistan/other out-of-scope job from
+        # remaining eligible for application-package preparation after the filter is added.
+        existing_location_rows = connection.execute(
+            "SELECT url, title, location, region, description, verification_status, verification_reason "
+            "FROM jobs WHERE verification_status IN ('confirmed_job', 'likely_job') OR COALESCE(recommended, 0) = 1"
+        ).fetchall()
+        outside_count = 0
+        unknown_count = 0
+        for url, title, location, region, description, status, old_reason in existing_location_rows:
+            job = {
+                "url": url, "title": title or "", "location": location or "Not specified",
+                "region": region or "", "description": description or "",
+                "verification_status": status or "review_required",
+            }
+            country, evidence = _job_location_evidence(job)
+            if country and not _location_is_allowed(country):
+                connection.execute(
+                    "UPDATE jobs SET verification_status='out_of_scope_location', fit_score=NULL, recommended=0, "
+                    "verification_reason=? WHERE url=?",
+                    (f"Historical record excluded by configured location filter: {country}. Evidence: {evidence}.", url),
+                )
+                outside_count += 1
+            elif not country and status in {"confirmed_job", "likely_job"}:
+                connection.execute(
+                    "UPDATE jobs SET verification_status='review_required', fit_score=NULL, recommended=0, "
+                    "verification_reason=? WHERE url=?",
+                    ("Historical vacancy retained for audit but removed from scoring/application eligibility because its primary work location could not be confirmed against ALLOWED_JOB_COUNTRIES.", url),
+                )
+                unknown_count += 1
+        if outside_count or unknown_count:
+            logger.info(
+                "Historical location cleanup: %d out-of-scope jobs disabled; %d jobs with unknown locations moved to manual review.",
+                outside_count, unknown_count,
+            )
 
 
 def increment_run_count() -> int:
@@ -1540,9 +1928,12 @@ def plan_search(state: JobSearchState) -> dict:
             "query": f'({role_groups[4]} OR {role_groups[7]}) ({location_query}) jobs vacancies careers junior OR entry-level OR associate',
         })
 
-    # Use the same user-configured region vocabulary for preferred-board searches.
-    # This keeps the preferred-site queries aligned with broad-web queries.
-    all_locations = " OR ".join(f"({query})" for query in REGIONS.values()) + ' OR remote OR "work from home"'
+    all_locations = (
+        'Egypt OR Cairo OR Alexandria OR Czechia OR Brno OR Prague OR Germany OR '
+        'Netherlands OR Poland OR Ireland OR Austria OR Europe OR UAE OR Dubai OR '
+        '"Abu Dhabi" OR "Saudi Arabia" OR Riyadh OR Jeddah OR Qatar OR Doha OR '
+        'Kuwait OR Oman OR Bahrain OR remote'
+    )
 
     # LinkedIn: intentionally NOT one broad query. Query actual individual job
     # posting URLs, split by role family and each configured region. This avoids
@@ -1850,7 +2241,7 @@ def save_jobs(state: JobSearchState) -> dict:
         }
 
     # Explicit manual-review and excluded decisions override the unverified baseline.
-    for group_name in ("not_opened_jobs", "review_required_jobs", "excluded_pages", "verified_jobs", "assessed_jobs"):
+    for group_name in ("not_opened_jobs", "review_required_jobs", "excluded_pages", "verified_jobs", "assessed_jobs", "out_of_scope_jobs"):
         for job in state.get(group_name, []):
             url = normalize_url(str(job.get("url") or ""))
             if url:
@@ -2004,7 +2395,7 @@ def export_report(state: JobSearchState) -> dict:
         ("All Discovered Leads", status_rows),
         ("Verified & Scored", [row for row in status_rows if row["URL Verification"] in {"confirmed_job", "likely_job"} and row["Match Score"] is not None]),
         ("Needs Manual Review", [row for row in status_rows if row["URL Verification"] in {"review_required", "unverified", ""}]),
-        ("Excluded Non-Jobs", [row for row in status_rows if row["URL Verification"] in {"not_job", "unavailable"}]),
+        ("Excluded Non-Jobs", [row for row in status_rows if row["URL Verification"] in {"not_job", "unavailable", "out_of_scope_location"}]),
     ]
     # Remove the default sheet and create consistent tabs. The first sheet includes
     # pending/manual-review records, so the workbook remains informative even if
@@ -2045,10 +2436,10 @@ def export_report(state: JobSearchState) -> dict:
 # 15. Node: Read cumulative Excel and send scheduled digests
 # =========================================================
 
-def is_secondary_cv() -> bool:
-    """Identify secondary candidate's CV by filename keywords configured in .env."""
+def is_ahmed_cv() -> bool:
+    """Identify Ahmed's CV by filename keywords configured in .env."""
     cv_stem = CV_PATH.stem.lower().replace("_", " ").replace("-", " ")
-    return any(keyword in cv_stem for keyword in SECOND_CV_KEYWORDS)
+    return any(keyword in cv_stem for keyword in AHMED_CV_KEYWORDS)
 
 
 def categorize_jobs_dynamically(jobs: list[dict[str, Any]]) -> dict[int, str]:
@@ -2189,8 +2580,8 @@ def mark_jobs_emailed(urls: list[str]) -> None:
 
 def get_candidate_recipients() -> list[str]:
     """Return recipients for the CV currently being processed."""
-    if is_secondary_cv():
-        raw = SECOND_CV_EMAIL
+    if is_ahmed_cv():
+        raw = AHMED_CV_EMAIL
     else:
         raw = os.getenv("MY_CV_EMAILS", "").strip() or os.getenv("NOTIFICATION_EMAILS", "").strip()
     return list(dict.fromkeys(address.strip() for address in raw.split(",") if address.strip()))
@@ -2375,8 +2766,8 @@ def send_career_feedback(state: JobSearchState) -> dict:
         logger.info("Career feedback email disabled by SEND_CAREER_FEEDBACK_EMAIL.")
         return {}
 
-    candidate_is_secondary = is_secondary_cv()
-    candidate_label = "Secondary candidate" if candidate_is_secondary else CV_PATH.stem.replace("_", " ")
+    candidate_is_ahmed = is_ahmed_cv()
+    candidate_label = "Ahmed" if candidate_is_ahmed else CV_PATH.stem.replace("_", " ")
     recipients = get_candidate_recipients()
     if not recipients:
         logger.warning("Career gap email skipped: no recipient is configured for %s.", candidate_label)
@@ -2649,7 +3040,7 @@ def prepare_application_packages(state: JobSearchState) -> dict:
             db_path=DB_PATH,
             output_dir=OUTPUT_DIR,
             llm=llm,
-            candidate_is_secondary=is_secondary_cv(),
+            candidate_is_ahmed=is_ahmed_cv(),
             run_number=int(state.get("run_number", 0)),
         )
     except Exception:
@@ -2669,8 +3060,10 @@ def build_graph():
     builder.add_node("plan_search", plan_search)
     builder.add_node("search_region", search_region)
     builder.add_node("deduplicate", deduplicate)
+    builder.add_node("filter_target_locations_before_verification", filter_target_locations_before_verification)
     builder.add_node("verify_job_pages", verify_job_pages)
     builder.add_node("classify_opened_job_pages", classify_opened_job_pages)
+    builder.add_node("enforce_target_locations_after_verification", enforce_target_locations_after_verification)
     builder.add_node("categorize_verified_jobs", categorize_verified_jobs)
     builder.add_node("match_jobs", match_jobs)
     builder.add_node("save_jobs", save_jobs)
@@ -2690,9 +3083,11 @@ def build_graph():
     )
 
     builder.add_edge("search_region", "deduplicate")
-    builder.add_edge("deduplicate", "verify_job_pages")
+    builder.add_edge("deduplicate", "filter_target_locations_before_verification")
+    builder.add_edge("filter_target_locations_before_verification", "verify_job_pages")
     builder.add_edge("verify_job_pages", "classify_opened_job_pages")
-    builder.add_edge("classify_opened_job_pages", "categorize_verified_jobs")
+    builder.add_edge("classify_opened_job_pages", "enforce_target_locations_after_verification")
+    builder.add_edge("enforce_target_locations_after_verification", "categorize_verified_jobs")
     builder.add_edge("categorize_verified_jobs", "match_jobs")
     builder.add_edge("match_jobs", "save_jobs")
     # Save jobs, generate tailored documents, then send category emails so each
@@ -2722,6 +3117,7 @@ def run_current_cv():
         "FIT SETTINGS: STRONG_FIT_MIN_SCORE=%d (strong category email at/above this score; final learning plan below it); APPLICATION_MIN_FIT_SCORE=%d; MAX_JOBS_TO_ASSESS=%d; MAX_JOB_URLS_TO_VERIFY=%d.",
         STRONG_FIT_MIN_SCORE, APPLICATION_MIN_FIT_SCORE, MAX_JOBS_TO_ASSESS, MAX_JOB_URLS_TO_VERIFY,
     )
+    logger.info("Location scope: %d allowed countries; out-of-scope locations are filtered before URL opening and again after page verification. Unknown locations are held for manual review.", len(ALLOWED_JOB_COUNTRIES))
 
     initial_state: JobSearchState = {
         "raw_jobs": [],
@@ -2747,9 +3143,10 @@ def run_current_cv():
         1 for job in opened_pages
         if not str(job.get("verification_reason") or "").startswith("URL/title matches a known job-search")
     ))
-    print("Verified vacancy pages:", len(final_state.get("verified_jobs", [])))
+    print("Verified vacancy pages in target locations:", len(final_state.get("verified_jobs", [])))
     print("URLs requiring manual review:", len(final_state.get("review_required_jobs", [])))
-    print("Excluded non-job pages:", len(final_state.get("excluded_pages", [])))
+    print("Excluded non-job/out-of-scope pages:", len(final_state.get("excluded_pages", [])))
+    print("Explicitly out-of-scope location URLs:", len(final_state.get("out_of_scope_jobs", [])))
     print("Strong-fit threshold:", STRONG_FIT_MIN_SCORE)
     if not final_state.get("assessed_jobs", []):
         print("NOTE: No vacancy passed URL verification and fit assessment in this run. Strong-fit category emails will not be sent for unverified URLs; inspect the Needs Manual Review Excel tab.")

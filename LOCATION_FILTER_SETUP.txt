@@ -1,0 +1,52 @@
+JOB TRACKER LOCATION FILTER UPDATE
+
+WHAT THIS CHANGE DOES
+1. Adds filter_target_locations_before_verification immediately after deduplication. It excludes candidates with explicit location evidence outside the target-country allow-list before spending time opening their URLs.
+2. Keeps unknown locations for URL verification rather than assuming that the search task's region is the job's actual location.
+3. Adds enforce_target_locations_after_verification after the page-authenticity classifier. It checks the location extracted from JobPosting structured data, a labeled location on the opened page, the job title, LinkedIn locale URL, and location evidence in the snippet/page.
+4. Only vacancies with a primary location in the allowed countries or Europe can proceed to categorization and fit scoring. Unknown primary locations are moved to manual review instead of being scored as job matches.
+5. India, Pakistan, Bangladesh, Singapore, Malaysia, the US, and other explicitly detected non-target countries are excluded before scoring when the job's location evidence identifies them as the primary location.
+6. Out-of-scope locations are saved in SQLite and appear in the Excel "Excluded Non-Jobs" sheet as out_of_scope_location, with a reason and the job URL.
+7. Existing database records are rechecked on startup. Explicitly out-of-scope records are disabled for recommendation/application preparation; previously eligible records with no reliable primary location are moved to manual review. Historical rows are retained for auditing.
+8. LinkedIn country-specific subdomains (such as in.linkedin.com) are used as a fallback location signal when the indexed title omits a location.
+
+DEFAULT ALLOWED LOCATIONS
+- Europe (the country allow-list contains European countries)
+- Egypt
+- United Arab Emirates
+- Saudi Arabia
+- Qatar
+- Kuwait
+- Oman
+- Bahrain
+
+OPTIONAL .ENV OVERRIDE
+The defaults above are built into main.py. No .env change is required. To make the scope explicit, you may add this line to your EXISTING .env (edit an existing ALLOWED_JOB_COUNTRIES line rather than adding a duplicate):
+
+ALLOWED_JOB_COUNTRIES=Europe,Egypt,United Arab Emirates,Saudi Arabia,Qatar,Kuwait,Oman,Bahrain
+
+Including Europe allows the built-in list of European countries. If you need to add/remove a specific country, edit this variable with comma-separated country names. Do not put quotes around the entire value.
+
+INSTALL
+1. Stop the running tracker.
+2. Back up your current main.py.
+3. Replace only main.py with the included main.py.
+4. Keep application_manager.py, email_notifier.py, .env, CVs, and output/database files unchanged.
+5. Run in PowerShell:
+
+   cd C:\Users\Moustafa\Downloads\Job_tracker_project
+   .\.venv\Scripts\python.exe -m py_compile main.py application_manager.py email_notifier.py
+   .\.venv\Scripts\python.exe main.py
+
+EXPECTED BEHAVIOR
+- A job explicitly located in Bengaluru, India or Lahore, Pakistan is filtered before URL verification/scoring.
+- A vacancy in Riyadh, Saudi Arabia or Munich, Germany can continue if it is also verified as an individual vacancy.
+- If the page is blocked and the location cannot be confirmed, the URL remains in manual review and is not scored or emailed as a confirmed target-location job.
+- Courses, ads, generic search pages and other non-jobs continue to be handled by the existing vacancy-verification node.
+- Strong-fit and lower-fit email routing remains based on STRONG_FIT_MIN_SCORE.
+
+LIMITATIONS
+Location detection is evidence-based, not infallible. Search results may omit the location, blocked pages may hide it, and place names can be ambiguous. Unknown locations are therefore kept for manual review rather than treated as qualifying jobs. Search engines may still return results from unwanted countries; this node is intended to stop those results from reaching fit scoring or application preparation.
+
+VALIDATION
+The updated main.py passed Python syntax compilation and isolated location-filter checks for Germany, Czechia, Saudi Arabia, India, Pakistan, remote-Europe roles, unknown locations, pre-verification filtering, and post-verification filtering. The full workflow has not been run against your live SearXNG, Gemini, database, and SMTP setup here.

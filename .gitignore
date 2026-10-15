@@ -29,3 +29,17 @@ application_packages*.zip
 
 # Local SearXNG config may include a generated secret key
 searxng/settings.yml
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+output/
+*.pdf
+*.db
+*.sqlite
+*.sqlite3
+*.bak
+*.backup
+*.xlsx
